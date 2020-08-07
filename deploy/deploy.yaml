@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: minio-credential-injector
+  namespace: daaas
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+---
+apiVersion: cert-manager.io/v1alpha2
+kind: Issuer
+metadata:
+  name: minio-credential-injector-issuer
+  namespace: daaas
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1alpha2
+kind: Certificate
+metadata:
+  name: minio-credential-injector
+  namespace: daaas
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+spec:
+  secretName: minio-credential-injector-tls
+  commonName: "minio-credential-injector.daaas.svc.cluster.local"
+  dnsNames:
+  - minio-credential-injector
+  - minio-credential-injector.daaas
+  - minio-credential-injector.daaas.svc
+  - minio-credential-injector.daaas.svc.cluster
+  isCA: true
+  duration: 8760h
+  issuerRef:
+    name: minio-credential-injector-issuer
+    kind: Issuer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio-credential-injector
+  namespace: daaas
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+spec:
+  selector:
+    matchLabels:
+      apps.kubernetes.io/name: minio-credential-injector
+  template:
+    metadata:
+      labels:
+        apps.kubernetes.io/name: minio-credential-injector
+      annotations:
+        sidecar.istio.io/inject: 'false'
+    spec:
+      serviceAccountName: minio-credential-injector
+      imagePullSecrets:
+        - name: k8scc01covidacr-registry-connection
+      containers:
+      - name: minio-credential-injector
+        image: k8scc01covidacr.azurecr.io/minio-credential-injector:dd7e608149021e79ae97bac99f89dbaceb670e11
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - name: https
+          containerPort: 8443
+        volumeMounts:
+        - name: certs
+          mountPath: /certs
+          readOnly: true
+      volumes:
+      - name: certs
+        secret:
+          secretName: minio-credential-injector-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-credential-injector
+  namespace: daaas
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+spec:
+  selector:
+    apps.kubernetes.io/name: minio-credential-injector
+  ports:
+  - name: https
+    port: 443
+    targetPort: 8443
+---
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: daaas/minio-credential-injector
+  labels:
+    apps.kubernetes.io/name: minio-credential-injector
+  name: minio-credential-injector
+webhooks:
+- admissionReviewVersions:
+  - v1beta1
+  clientConfig:
+    service:
+      name: minio-credential-injector
+      namespace: daaas
+      path: /mutate
+      port: 443
+  failurePolicy: Ignore
+  name: minio-credential-injector.statcan.gc.ca
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+    scope: '*'
